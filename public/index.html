@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>¡Párame la mano! / Stop Online</title>
+  <script src="/socket.io/socket.io.js"></script>
+  <style>
+    body { font-family: sans-serif; max-width: 800px; margin: auto; padding: 20px; }
+    .hidden { display: none; }
+    .card { border: 1px solid #ccc; padding: 15px; border-radius: 8px; margin-bottom: 15px; }
+    .timer { font-size: 2em; color: #d9534f; font-weight: bold; }
+    input[type="text"] { width: 100%; padding: 8px; margin: 5px 0 15px; box-sizing: border-box; }
+    button { padding: 10px 20px; background: #28a745; color: white; border: none; cursor: pointer; border-radius: 5px; }
+    button:disabled { background: #ccc; }
+    .stop-btn { background: #dc3545; font-size: 1.2em; width: 100%; }
+    
+    table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+    th, td { border: 1px solid #ddd; padding: 8px; text-align: center; }
+    th { background-color: #f2f2f2; }
+    .btn-voto { background: #6c757d; font-size: 0.8em; padding: 5px 10px; }
+    .btn-voto.invalido { background: #dc3545; }
+  </style>
+</head>
+<body>
+
+  <h1>¡Párame la mano! 🖐️</h1>
+
+  <!-- 1. Registro -->
+  <div id="pantalla-registro" class="card">
+    <label>Tu Nombre:</label>
+    <input type="text" id="nombre-input" placeholder="Ej. Carlos">
+    <button onclick="unirseAlJuego()">Entrar al juego</button>
+  </div>
+
+  <!-- 2. Panel de control del turno -->
+  <div id="panel-turno" class="card hidden">
+    <h3>Es tu turno de configurar la ronda</h3>
+    <label>Selecciona una Letra:</label>
+    <input type="text" id="letra-input" maxlength="1" placeholder="Ej. M">
+    <label>Tiempo del turno (segundos):</label>
+    <input type="number" id="tiempo-input" value="60" min="10">
+    <button onclick="iniciarRonda()">Comenzar Turno</button>
+  </div>
+
+  <!-- 3. Tablero del juego -->
+  <div id="tablero-juego" class="card hidden">
+    <div>Letra de la ronda: <b id="letra-activa" style="font-size: 1.5em;">-</b></div>
+    <div>Tiempo restante: <span id="temporizador" class="timer">0</span>s</div>
+    
+    <form id="formulario-palabras">
+      <label>Nombre:</label><input type="text" class="palabra-input" data-cat="nombre">
+      <label>Apellido:</label><input type="text" class="palabra-input" data-cat="apellido">
+      <label>Ciudad / País:</label><input type="text" class="palabra-input" data-cat="ciudad">
+      <label>Animal:</label><input type="text" class="palabra-input" data-cat="animal">
+      <label>Fruta / Verdura:</label><input type="text" class="palabra-input" data-cat="fruta">
+      <label>Cosa:</label><input type="text" class="palabra-input" data-cat="cosa">
+    </form>
+
+    <button id="btn-stop" class="stop-btn" onclick="parameLaMano()">¡PÁRAME LA MANO!</button>
+  </div>
+
+  <!-- 4. Pantalla de Votación y Validación -->
+  <div id="pantalla-votacion" class="card hidden">
+    <h3>Fase de Validación y Votación 🗳️</h3>
+    <p>Marca con <b>❌ Inválida</b> si la palabra no existe o no tiene coherencia. Si la mayoría la invalida, valdrá 0 puntos.</p>
+    <div id="contenedor-tabla-votacion"></div>
+    <br>
+    <button id="btn-finalizar-votacion" onclick="finalizarVotacion()">Confirmar y Calcular Puntos</button>
+  </div>
+
+  <!-- 5. Tabla de Posiciones -->
+  <div id="panel-posiciones" class="card">
+    <h3>Tabla de Posiciones</h3>
+    <ul id="lista-jugadores"></ul>
+  </div>
+
+  <script>
+    const socket = io();
+    let esMiTurno = false;
+
+    function unirseAlJuego() {
+      const nombre = document.getElementById("nombre-input").value;
+      if (nombre) {
+        socket.emit("unirse", nombre);
+        document.getElementById("pantalla-registro").classList.add("hidden");
+      }
+    }
+
+    socket.on("es_tu_turno", (status) => {
+      esMiTurno = status;
+      document.getElementById("panel-turno").classList.remove("hidden");
+    });
+
+    function iniciarRonda() {
+      const letra = document.getElementById("letra-input").value;
+      const tiempo = document.getElementById("tiempo-input").value;
+
+      if (letra && tiempo) {
+        socket.emit("iniciar_turno", { letra, tiempo });
+        document.getElementById("panel-turno").classList.add("hidden");
+      }
+    }
+
+    socket.on("ronda_iniciada", (datos) => {
+      document.getElementById("letra-activa").textContent = datos.letra;
+      document.getElementById("temporizador").textContent = datos.tiempoRestante;
+      document.getElementById("tablero-juego").classList.remove("hidden");
+      document.getElementById("pantalla-votacion").classList.add("hidden");
+      document.getElementById("btn-stop").disabled = false;
+
+      document.querySelectorAll(".palabra-input").forEach(i => { i.value = ""; i.disabled = false; });
+    });
+
+    socket.on("tick_tiempo", (tiempo) => {
+      document.getElementById("temporizador").textContent = tiempo;
+    });
+
+    function parameLaMano() {
+      socket.emit("parame_la_mano");
+      document.getElementById("btn-stop").disabled = true;
+    }
+
+    socket.on("alerta_parame_la_mano", (idJugador) => {
+      alert("¡Alguien gritó PÁRAME LA MANO! Quedan 10 segundos.");
+    });
+
+    socket.on("fin_tiempo", () => {
+      document.querySelectorAll(".palabra-input").forEach(i => i.disabled = true);
+      document.getElementById("btn-stop").disabled = true;
+
+      const respuestas = {};
+      document.querySelectorAll(".palabra-input").forEach(input => {
+        respuestas[input.dataset.cat] = input.value;
+      });
+
+      socket.emit("enviar_respuestas", respuestas);
+    });
+
+    socket.on("iniciar_votacion", ({ listaRespuestas, letra }) => {
+      document.getElementById("tablero-juego").classList.add("hidden");
+      document.getElementById("pantalla-votacion").classList.remove("hidden");
+
+      const categorias = ["nombre", "apellido", "ciudad", "animal", "fruta", "cosa"];
+      let html = `<table><thead><tr><th>Jugador</th>`;
+
+      categorias.forEach(cat => html += `<th>${cat.toUpperCase()}</th>`);
+      html += `</tr></thead><tbody>`;
+
+      listaRespuestas.forEach(j => {
+        html += `<tr><td><b>${j.nombre}</b></td>`;
+        categorias.forEach(cat => {
+          const palabra = (j.respuestas[cat] || "").trim();
+          const esPropia = j.jugadorId === socket.id;
+          const clave = `${j.jugadorId}_${cat}`;
+
+          html += `<td>
+            <div>${palabra || "<i>-vacía-</i>"}</div>
+            ${(!esPropia && palabra) ? `
+              <button class="btn-voto" id="btn_${clave}" onclick="conmutarVoto('${j.jugadorId}', '${cat}')">
+                ❌ Invalida (<span id="votos_${clave}">0</span>)
+              </button>
+            ` : ""}
+          </td>`;
+        });
+        html += `</tr>`;
+      });
+
+      html += `</tbody></table>`;
+      document.getElementById("contenedor-tabla-votacion").innerHTML = html;
+    });
+
+    function conmutarVoto(autorId, categoria) {
+      const clave = `${autorId}_${categoria}`;
+      const btn = document.getElementById(`btn_${clave}`);
+      const esInvalida = !btn.classList.contains("invalido");
+
+      if (esInvalida) {
+        btn.classList.add("invalido");
+      } else {
+        btn.classList.remove("invalido");
+      }
+
+      socket.emit("votar_invalida", { autorId, categoria, esInvalida });
+    }
+
+    socket.on("actualizar_votos", ({ clave, totalVotosEnContra }) => {
+      const contador = document.getElementById(`votos_${clave}`);
+      if (contador) {
+        contador.textContent = totalVotosEnContra;
+      }
+    });
+
+    function finalizarVotacion() {
+      socket.emit("finalizar_votacion");
+      document.getElementById("btn-finalizar-votacion").disabled = true;
+    }
+
+    socket.on("actualizar_jugadores", (jugadores) => {
+      const lista = document.getElementById("lista-jugadores");
+      lista.innerHTML = jugadores.map(j => `<li>${j.nombre}: ${j.puntos} pts</li>`).join("");
+    });
+
+    socket.on("resultados_ronda", (datos) => {
+      alert("Se han calculado los resultados finales tomando en cuenta la votación.");
+      document.getElementById("pantalla-votacion").classList.add("hidden");
+      document.getElementById("btn-finalizar-votacion").disabled = false;
+    });
+  </script>
+</body>
+</html>
